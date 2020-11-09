@@ -8,6 +8,9 @@ import (
 	"net/rpc"
 	"os"
 	"time"
+	"strings"
+	"bufio"
+	"sort"
 )
 
 // import "sort"
@@ -19,7 +22,13 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+// ByKey for sorting by key.
+type ByKey []KeyValue
 
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 //
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -29,13 +38,14 @@ func ihash(key string) int {
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
 }
-
+// Seperator
+const (Seperator string = "\t")
 // CreateReduceFile creates intermediate files
-func CreateReduceFile(id int, nReduce int) ([]*os.File, []string, error) {
+func CreateReduceFile(id JobID, nReduce int) ([]*os.File, []string, error) {
 	files := make([]*os.File, nReduce)
 	fileNames := make([]string, nReduce)
 	for i := 0; i < nReduce; i++ {
-		fileName := fmt.Sprintf("mr-reduce-%d-%d", id, i)
+		fileName := fmt.Sprintf("mr-reduce-%s-%d", id, i)
 		fileNames[i] = fileName
 		f, err := os.Create(fileName)
 		if err != nil {
@@ -73,40 +83,85 @@ func ReadFile(job Job, mapf func(string, string) []KeyValue) []KeyValue {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
-	// Your worker implementation here.
-
-	// uncomment to send the Example RPC to the master.
-	job, done := RequestJob()
-	if done {
-		return
-	} else if job.JobType == MapJob {
-		files, fileNames, err := CreateReduceFile(job.ID, job.NReduce)
-		if nil != err {
-			log.Fatal(err)
-			return
-		}
-		intermediate := ReadFile(job, mapf)
-		//fmt.Printf("%v+", intermediate)
-		for _, v := range intermediate {
-			id := ihash(v.Key) % job.NReduce
-			file := files[id]
-			// fmt.Printf("------%v %d", fileNames, len(fileNames))
-			// fmt.Printf("%s", fmt.Sprintf("%s %s\n", v.Key, v.Value))
-			n, err := file.WriteString(fmt.Sprintf("%s %s\n", v.Key, v.Value))
+	for job, done := RequestJob(); !done; {
+		if job.JobType == MapJob {
+			files, fileNames, err := CreateReduceFile(job.ID, job.NReduce)
 			if nil != err {
-				panic(err)
+				log.Fatal(err)
+				return
 			}
-			log.Printf("%d Writed %d", job.ID, n)
+			intermediate := ReadFile(job, mapf)
+			sort.Sort(ByKey(intermediate))
+			//fmt.Printf("%v+", intermediate)
+			for _, v := range intermediate {
+				id := ihash(v.Key) % job.NReduce
+				file := files[id]
+				// fmt.Printf("------%v %d", fileNames, len(fileNames))
+				// fmt.Printf("%s", fmt.Sprintf("%s %s\n", v.Key, v.Value))
+				n, err := file.WriteString(fmt.Sprintf("%s%s%s\n", v.Key, Seperator, v.Value))
+				if nil != err {
+					panic(err)
+				}
+				log.Printf("%s Writed %d", job.ID, n)
+			}
+			for _, f := range files {
+				defer f.Close()
+			}
+			FinishMapJob(job.ID, fileNames)
+		} else if job.JobType == ReduceJob {
+			fmt.Printf("received reduce task %v+", job)
+			files := strings.Split(job.FileName, ",")
+			oname := fmt.Sprintf("mr-out-%s", job.ID)
+			ofile, _ := os.Create(oname)
+			for _, f := range(files) {
+				lines, err := readFileWithScanner(f)
+				if err != nil {
+					panic(err)
+				}
+				i := 0
+				for i < len(lines) {
+					j := i + 1
+					values := []string{lines[i].Value}
+					for j < len(lines) && lines[j].Key == lines[i].Key {
+						values = append(values, lines[j].Value)
+						j++
+					}
+					output := reducef(lines[i].Key, values)
+					// this is the correct format for each line of Reduce output.
+					fmt.Fprintf(ofile, "%v %v\n", lines[i].Key, output)
+					i = j
+				}
+			}
+		} else {
+			log.Fatal("Invalid job type")
+			break
 		}
-		for _, f := range files {
-			defer f.Close()
-		}
-		FinishMapJob(job.ID, fileNames)
-	} else if job.JobType == ReduceJob {
-
-	} else {
-		log.Fatal("Invalid job type")
 	}
+}
+func readFileWithScanner(fn string) ([]KeyValue, error) {
+    fmt.Println("readFileWithScanner (scanner fails with long lines)")
+
+    // Don't use this, it doesn't work with long lines...
+
+    file, err := os.Open(fn)
+    if err != nil {
+        return []KeyValue{}, err
+    }
+    defer file.Close()
+
+    // Start reading from the file using a scanner.
+	scanner := bufio.NewScanner(file)
+	result := make([]KeyValue, 0)
+    for scanner.Scan() {
+		line := scanner.Text()
+		tokens := strings.Split(line, Seperator)
+		result = append(result, KeyValue{Key: tokens[0], Value: tokens[1]})
+    }
+    if scanner.Err() != nil {
+        fmt.Printf(" > Failed with error %v\n", scanner.Err())
+        return result,scanner.Err()
+    }
+    return result,nil
 }
 
 // FinishMapJob calls rpc FinishMapTask on master

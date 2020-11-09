@@ -158,7 +158,7 @@ func (m *Master) monitor() {
 func (m *Master) IsDone() bool {
 	select {
     case msg := <-m.Done:
-        return true
+        return msg
     default:
         return false
     }
@@ -187,7 +187,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 		m.ReduceFiles[i] = make([]string, 0)
 	}
 	// Your code here.
-	for i, s := range files {
+	for _, s := range files {
 		reader, err := os.Open(s)
 		defer reader.Close()
 		if nil != err {
