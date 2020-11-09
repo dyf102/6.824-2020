@@ -21,7 +21,7 @@ func main() {
 	}
 
 	m := mr.MakeMaster(os.Args[1:], 10)
-	for m.Done() == false {
+	for m.IsDone() == false {
 		time.Sleep(time.Second)
 	}
 

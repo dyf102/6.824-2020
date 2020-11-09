@@ -9,17 +9,30 @@ package mr
 import "os"
 import "strconv"
 
-//
 // example to show how to declare the arguments
 // and reply for an RPC.
-//
 
-type ExampleArgs struct {
-	X int
+// JobRequestArgs represents the request args 
+type JobRequestArgs struct {
+	JobID JobID
+}
+// MapJobFinishArgs represents the request args 
+type MapJobFinishArgs struct {
+	JobID JobID
+	Intermediate []string
 }
 
-type ExampleReply struct {
-	Y int
+// MapJobFinishReply represents
+type MapJobFinishReply struct {
+	Done bool
+}
+
+// JobRequestReply represents the response 
+type JobRequestReply struct {
+	Done bool
+	Retry bool
+	Job Job 
+	NReduce int
 }
 
 // Add your RPC definitions here.
