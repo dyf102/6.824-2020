@@ -16,16 +16,16 @@ import "strconv"
 type JobRequestArgs struct {
 	JobID JobID
 }
-// MapJobFinishArgs represents the request args 
-type MapJobFinishArgs struct {
+// JobFinishArgs represents the request args 
+type JobFinishArgs struct {
 	JobID JobID
 	Intermediate []string
 }
-
-// MapJobFinishReply represents
-type MapJobFinishReply struct {
+// JobFinishReply represents
+type JobFinishReply struct {
 	Done bool
 }
+
 
 // JobRequestReply represents the response 
 type JobRequestReply struct {
