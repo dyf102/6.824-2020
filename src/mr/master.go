@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,7 +34,7 @@ const (
 	// JobFinish job finished msg
 	JobFinish MsgType = 3
 	// Timeout parameter
-	Timeout int = 10
+	Timeout int = 20
 )
 
 // Job contains job information
@@ -62,6 +63,7 @@ type Master struct {
 	StartTimeTable map[JobID]int
 	EndTimeTable   map[JobID]int
 	ReduceFiles    map[int][]string
+	mu             sync.Mutex
 	Done           chan bool
 	JobInfo        map[JobID]Job
 }
@@ -90,9 +92,16 @@ func (m *Master) GetTask(args *JobRequestArgs, reply *JobRequestReply) error {
 func (m *Master) FinishMapTask(args *JobFinishArgs, reply *JobFinishReply) error {
 	reply.Done = true
 	// store intermediate files
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.StartTimeTable[args.JobID] > args.Starttime {
+		// duplicated job, just discord
+		return nil
+	}
 	for i, f := range args.Intermediate {
 		m.ReduceFiles[i] = append(m.ReduceFiles[i], f)
 	}
+
 	msg := UpdateMsg{Type: JobFinish, Timestamp: int(time.Now().Unix()), JobID: args.JobID}
 	m.MsgQueue <- msg
 	return nil
@@ -101,7 +110,12 @@ func (m *Master) FinishMapTask(args *JobFinishArgs, reply *JobFinishReply) error
 // FinishReduceTask should be call when worker has finished the task
 func (m *Master) FinishReduceTask(args *JobFinishArgs, reply *JobFinishReply) error {
 	reply.Done = true
-	// store intermediate files
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.StartTimeTable[args.JobID] > args.Starttime {
+		// duplicated job, just discord
+		return nil
+	}
 	msg := UpdateMsg{Type: JobFinish, Timestamp: int(time.Now().Unix()), JobID: args.JobID}
 	m.MsgQueue <- msg
 	return nil
@@ -127,12 +141,14 @@ func (m *Master) server() {
 // checkTimeout
 func (m *Master) checkTimeout() {
 	now := int(time.Now().Unix())
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for jobID, starttime := range m.StartTimeTable {
-		if now - starttime > Timeout {
+		if starttime != -1 && now-starttime > Timeout {
 			fmt.Println("Timeout")
-			m.StartTimeTable[jobID] = now
+			m.StartTimeTable[jobID] = -1
 			m.Panding <- m.JobInfo[jobID]
-			break
+			return
 		}
 	}
 }
@@ -143,13 +159,18 @@ func (m *Master) monitor() {
 		case msg := <-m.MsgQueue:
 			if msg.Type == JobStart {
 				//if _, exist := m.StartTimeTable[msg.JobID]; !exist {
+				m.mu.Lock()
 				m.StartTimeTable[msg.JobID] = msg.Timestamp
+				m.mu.Unlock()
 				//}
 			} else {
 				if _, exist := m.EndTimeTable[msg.JobID]; !exist {
+					m.mu.Lock()
 					m.EndTimeTable[msg.JobID] = msg.Timestamp
+					m.mu.Unlock()
 				}
 			}
+		default:
 		}
 	}
 	if Debug {
@@ -158,6 +179,7 @@ func (m *Master) monitor() {
 	}
 
 	// clear time table for reduce task
+	m.mu.Lock()
 	m.StartTimeTable = make(map[JobID]int)
 	m.EndTimeTable = make(map[JobID]int)
 	// add reduce tasks into queue
@@ -167,6 +189,7 @@ func (m *Master) monitor() {
 		m.JobInfo[id] = job
 		m.Panding <- job
 	}
+	m.mu.Unlock()
 
 	for len(m.EndTimeTable) < m.NReduce {
 		m.checkTimeout()
@@ -174,14 +197,18 @@ func (m *Master) monitor() {
 		case msg := <-m.MsgQueue:
 			if msg.Type == JobStart {
 				//if _, exist := m.StartTimeTable[msg.JobID]; !exist {
+				m.mu.Lock()
 				m.StartTimeTable[msg.JobID] = msg.Timestamp
+				m.mu.Unlock()
 				//}
 			} else {
 				if _, exist := m.EndTimeTable[msg.JobID]; !exist {
 					m.EndTimeTable[msg.JobID] = msg.Timestamp
 				}
 			}
+		default:
 		}
+
 	}
 	close(m.Panding) // close channel so get task will return done
 	m.Done <- true   // send flag to isDone

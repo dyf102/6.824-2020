@@ -97,7 +97,12 @@ func Worker(mapf func(string, string) []KeyValue,
 			return
 		}
 		if Debug {
-			fmt.Printf("get Job %v+", job)
+			if job.JobType == MapJob {
+				fmt.Printf("get Map Job %v+", job)
+			} else {
+				fmt.Printf("get Reduce Job %v+", job)
+			}
+
 		}
 
 		if job.JobType == MapJob {
@@ -124,7 +129,7 @@ func Worker(mapf func(string, string) []KeyValue,
 				defer f.Close()
 			}
 			// break
-			FinishMapJob(job.ID, fileNames)
+			FinishMapJob(job.ID, fileNames, job.StartTimstamp)
 		} else if job.JobType == ReduceJob {
 			if Debug {
 				fmt.Printf("received reduce task %v+", job)
@@ -160,7 +165,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			for k, v := range resultMap {
 				fmt.Fprintf(ofile, "%v %v\n", k, reducef(k, v))
 			}
-			FinishReduceJob(job.ID)
+			FinishReduceJob(job.ID, job.StartTimstamp)
 		} else {
 			log.Fatal("Invalid job type")
 			break
@@ -190,10 +195,11 @@ func readFileWithScanner(fn string) ([]KeyValue, error) {
 }
 
 // FinishMapJob calls rpc FinishMapTask on master
-func FinishMapJob(JobID JobID, FileNames []string) {
+func FinishMapJob(JobID JobID, FileNames []string, Starttime int) {
 	args := JobFinishArgs{
 		JobID:        JobID,
-		Intermediate: FileNames}
+		Intermediate: FileNames,
+		Starttime:    Starttime}
 	reply := JobFinishReply{}
 	if !call("Master.FinishMapTask", &args, &reply) {
 		log.Fatal("Failed to call Master.FinishMapTask")
@@ -201,9 +207,10 @@ func FinishMapJob(JobID JobID, FileNames []string) {
 }
 
 // FinishReduceJob calls rpc FinishMapTask on master
-func FinishReduceJob(JobID JobID) {
+func FinishReduceJob(JobID JobID, Starttime int) {
 	args := JobFinishArgs{
-		JobID: JobID}
+		JobID:     JobID,
+		Starttime: Starttime}
 	reply := JobFinishReply{}
 	if !call("Master.FinishReduceTask", &args, &reply) {
 		log.Fatal("Failed to call Master.FinishMapTask")
